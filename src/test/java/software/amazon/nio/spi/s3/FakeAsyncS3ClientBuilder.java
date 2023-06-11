@@ -17,7 +17,7 @@ import software.amazon.awssdk.services.s3.crt.S3CrtHttpConfiguration;
  * easily checked. It then delegates the implementation to the builder created
  * with <code>S3AsyncClient.crtBuilder()</code>
  */
-public class FakeAsyyncS3ClientBuilder implements S3CrtAsyncClientBuilder {
+public class FakeAsyncS3ClientBuilder implements S3CrtAsyncClientBuilder {
 
     private final S3CrtAsyncClientBuilder BUILDER = S3AsyncClient.crtBuilder();
 
@@ -38,7 +38,7 @@ public class FakeAsyyncS3ClientBuilder implements S3CrtAsyncClientBuilder {
 
     @Override
     public S3CrtAsyncClientBuilder region(Region r) {
-        region = region; return BUILDER.region(region);
+        r = region; return BUILDER.region(region);
     }
 
     @Override
