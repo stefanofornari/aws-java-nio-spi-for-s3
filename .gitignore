@@ -8,11 +8,12 @@ gradle.properties
 build
 bin
 
-# Ignore maven build output
+# Maven
 target
 
-# Ignore other IDEs files
+# IDEs
 .vscode
 
 # MacOS
 .DS_Store
+
