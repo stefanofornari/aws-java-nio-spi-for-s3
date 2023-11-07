@@ -9,7 +9,6 @@ import java.net.URI;
 import java.nio.file.Paths;
 import java.util.Map;
 import static org.assertj.core.api.BDDAssertions.then;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import software.amazon.nio.spi.s3.S3FileSystem;
@@ -42,5 +41,14 @@ public class S3PathTest {
         then(S3Path.getPath(fs, "s3x://somewhere.com:1010/bucket/afile.txt").toString()).isEqualTo("/afile.txt");
         then(S3Path.getPath(fs, "s3x://key:secret@somewhere.com:1010/bucket/afile.txt").toString()).isEqualTo("/afile.txt");
         provider.closeFileSystem(fs);
+    }
+
+    @Test
+    public void toUriProvidesFullUri() {
+        URI uri = URI.create("s3://bucket/subfolder/afile.txt");
+        then(Paths.get(uri).toUri()).isEqualTo(uri);
+
+        uri = URI.create("s3x://somewhere.com:1010/bucket/subfolder/afile.txt");
+        then(Paths.get(uri).toUri()).isEqualTo(uri);
     }
 }
