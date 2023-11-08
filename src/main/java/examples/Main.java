@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-package software.amazon.nio.spi.examples;
+package examples;
+
+import software.amazon.nio.spi.s3.S3Path;
 
 import java.io.IOException;
 import java.net.URI;
@@ -24,7 +26,7 @@ public class Main {
     public static void main(String[] args) throws IOException {
 
         if(args.length == 0){
-            System.err.println("Provide one or more S3 URIs to read from.");
+            System.out.println("Provide one or more S3 URIs to read from.");
             System.exit(1);
         }
 
@@ -34,12 +36,12 @@ public class Main {
             final Path path = Paths.get(URI.create(pathString));
 
             // proves that the correct path type is being used
-            assert path.getClass().getName().contains("S3Path");
+            assert path instanceof S3Path;
 
-            System.err.println("*** READING FROM "+path.toUri()+" ***");
+            System.out.println("*** READING FROM "+path.toUri()+" ***");
             Files.readAllLines(path)
                     .forEach(System.out::println);
-            System.err.println("*** FINISHED READING OBJECT ***\n");
+            System.out.println("*** FINISHED READING OBJECT ***\n");
         }
     }
 }
