@@ -5,17 +5,10 @@
 
 package software.amazon.nio.spi.s3;
 
+
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.stats.CacheStats;
-import org.checkerframework.checker.nullness.qual.NonNull;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import software.amazon.awssdk.core.BytesWrapper;
-import software.amazon.awssdk.core.async.AsyncResponseTransformer;
-import software.amazon.awssdk.services.s3.S3AsyncClient;
-import software.amazon.nio.spi.s3.util.TimeOutUtils;
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ReadableByteChannel;
@@ -26,6 +19,13 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
+import org.checkerframework.checker.nullness.qual.NonNull;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import software.amazon.awssdk.core.BytesWrapper;
+import software.amazon.awssdk.core.async.AsyncResponseTransformer;
+import software.amazon.awssdk.services.s3.S3AsyncClient;
+import software.amazon.nio.spi.s3.util.TimeOutUtils;
 
 /**
  * A {@code ReadableByteChannel} delegate for an {@code S3SeekableByteChannel} that maintains internal read ahead
@@ -36,6 +36,7 @@ import java.util.stream.Collectors;
  */
 class S3ReadAheadByteChannel implements ReadableByteChannel {
 
+    private static final Logger logger = LoggerFactory.getLogger(S3ReadAheadByteChannel.class);
     private final S3AsyncClient client;
     private final S3Path path;
     private final S3SeekableByteChannel delegator;
@@ -48,7 +49,6 @@ class S3ReadAheadByteChannel implements ReadableByteChannel {
     private boolean open;
     private final Cache<Integer, CompletableFuture<ByteBuffer>> readAheadBuffersCache;
 
-    private static final Logger logger = LoggerFactory.getLogger(S3ReadAheadByteChannel.class);
 
 
     /**
@@ -65,14 +65,17 @@ class S3ReadAheadByteChannel implements ReadableByteChannel {
      * @param timeUnit           the {@code TimeUnit} for the {@code timeout}.
      * @throws IOException if a problem occurs initializing the cached fragments
      */
-    S3ReadAheadByteChannel(S3Path path, int maxFragmentSize, int maxNumberFragments, S3AsyncClient client, S3SeekableByteChannel delegator, Long timeout, TimeUnit timeUnit) throws IOException {
+    S3ReadAheadByteChannel(S3Path path, int maxFragmentSize, int maxNumberFragments, S3AsyncClient client,
+                           S3SeekableByteChannel delegator, Long timeout, TimeUnit timeUnit) throws IOException {
         Objects.requireNonNull(path);
         Objects.requireNonNull(client);
         Objects.requireNonNull(delegator);
-        if (maxFragmentSize < 1)
+        if (maxFragmentSize < 1) {
             throw new IllegalArgumentException("maxFragmentSize must be >= 1");
-        if (maxNumberFragments < 2)
+        }
+        if (maxNumberFragments < 2) {
             throw new IllegalArgumentException("maxNumberFragments must be >= 2");
+        }
 
         logger.debug("max read ahead fragments '{}' with size '{}' bytes", maxNumberFragments, maxFragmentSize);
         this.client = client;
@@ -92,33 +95,35 @@ class S3ReadAheadByteChannel implements ReadableByteChannel {
     public int read(ByteBuffer dst) throws IOException {
         Objects.requireNonNull(dst);
 
-        long channelPosition = delegator.position();
+        var channelPosition = delegator.position();
         logger.debug("delegator position: {}", channelPosition);
 
         // if the position of the delegator is at the end (>= size) return -1. we're finished reading.
-        if (channelPosition >= size) return -1;
+        if (channelPosition >= size) {
+            return -1;
+        }
 
         //figure out the index of the fragment the bytes would start in
-        Integer fragmentIndex = fragmentIndexForByteNumber(channelPosition);
+        var fragmentIndex = fragmentIndexForByteNumber(channelPosition);
         logger.debug("fragment index: {}", fragmentIndex);
 
-        int fragmentOffset = (int) (channelPosition - (fragmentIndex.longValue() * maxFragmentSize));
+        var fragmentOffset = (int) (channelPosition - (fragmentIndex.longValue() * maxFragmentSize));
         logger.debug("fragment {} offset: {}", fragmentIndex, fragmentOffset);
 
         try {
-            final ByteBuffer fragment = Objects.requireNonNull(readAheadBuffersCache.get(fragmentIndex, this::computeFragmentFuture))
-                    .get(timeout, timeUnit)
-                    .asReadOnlyBuffer();
+            final var fragment = Objects.requireNonNull(readAheadBuffersCache.get(fragmentIndex, this::computeFragmentFuture))
+                .get(timeout, timeUnit)
+                .asReadOnlyBuffer();
 
             fragment.position(fragmentOffset);
             logger.debug("fragment remaining: {}", fragment.remaining());
             logger.debug("dst remaining: {}", dst.remaining());
 
             //put the bytes from fragment from the offset upto the min of fragment remaining or dst remaining
-            int limit = Math.min(fragment.remaining(), dst.remaining());
+            var limit = Math.min(fragment.remaining(), dst.remaining());
             logger.debug("byte limit: {}", limit);
 
-            byte[] copiedBytes = new byte[limit];
+            var copiedBytes = new byte[limit];
             fragment.get(copiedBytes, 0, limit);
             dst.put(copiedBytes);
 
@@ -128,14 +133,15 @@ class S3ReadAheadByteChannel implements ReadableByteChannel {
                 clearPriorFragments(fragmentIndex);
 
                 // until available cache slots are filled or number of fragments in file
-                int maxFragmentsToLoad = Math.min(maxNumberFragments - 1, numFragmentsInObject - fragmentIndex - 1);
+                var maxFragmentsToLoad = Math.min(maxNumberFragments - 1, numFragmentsInObject - fragmentIndex - 1);
 
-                for (int i = 0; i < maxFragmentsToLoad; i++) {
-                    final int idxToLoad = i + fragmentIndex + 1;
+                for (var i = 0; i < maxFragmentsToLoad; i++) {
+                    final var idxToLoad = i + fragmentIndex + 1;
 
                     //  add the index if it's not already there
-                    if (readAheadBuffersCache.asMap().containsKey(idxToLoad))
+                    if (readAheadBuffersCache.asMap().containsKey(idxToLoad)) {
                         continue;
+                    }
 
                     logger.debug("initiate pre-loading fragment with index '{}' from '{}'", idxToLoad, path.toUri());
                     readAheadBuffersCache.put(idxToLoad, computeFragmentFuture(idxToLoad));
@@ -151,11 +157,13 @@ class S3ReadAheadByteChannel implements ReadableByteChannel {
         } catch (ExecutionException e) {
             // the async execution completed exceptionally.
             // not currently obvious when this will happen or if we can recover
-            logger.error("an exception occurred while reading bytes from {} that was not recovered by the S3 Client RetryCondition(s)", path.toUri());
+            logger.error(
+                "an exception occurred while reading bytes from {} that was not recovered by the S3 Client RetryCondition(s)",
+                path.toUri());
             throw new IOException(e);
         } catch (TimeoutException e) {
             throw TimeOutUtils.logAndGenerateExceptionOnTimeOut(logger, "read",
-                    TimeOutUtils.TIMEOUT_TIME_LENGTH_5, TimeUnit.MINUTES);
+                TimeOutUtils.TIMEOUT_TIME_LENGTH_5, TimeUnit.MINUTES);
         }
     }
 
@@ -174,14 +182,14 @@ class S3ReadAheadByteChannel implements ReadableByteChannel {
 
     private void clearPriorFragments(int currentFragIndx) {
         final Set<@NonNull Integer> priorIndexes = readAheadBuffersCache
-                .asMap()
-                .keySet().stream()
-                .filter(idx -> idx < currentFragIndx)
-                .collect(Collectors.toSet());
+            .asMap()
+            .keySet().stream()
+            .filter(idx -> idx < currentFragIndx)
+            .collect(Collectors.toSet());
 
         if (!priorIndexes.isEmpty()) {
             logger.debug("invalidating fragment(s) '{}' from '{}'",
-                    priorIndexes.stream().map(Objects::toString).collect(Collectors.joining(", ")), path.toUri());
+                priorIndexes.stream().map(Objects::toString).collect(Collectors.joining(", ")), path.toUri());
 
             readAheadBuffersCache.invalidateAll(priorIndexes);
         }
@@ -198,8 +206,8 @@ class S3ReadAheadByteChannel implements ReadableByteChannel {
     }
 
     /**
-     * Obtain a snapshot of the statistics of the internal cache, provides information about hits, misses, requests, evictions etc.
-     * that are useful for tuning.
+     * Obtain a snapshot of the statistics of the internal cache, provides information about
+     * hits, misses, requests, evictions etc. that are useful for tuning.
      *
      * @return the statistics of the internal cache.
      */
@@ -208,18 +216,18 @@ class S3ReadAheadByteChannel implements ReadableByteChannel {
     }
 
     private CompletableFuture<ByteBuffer> computeFragmentFuture(int fragmentIndex) {
-        long readFrom = (long) fragmentIndex * maxFragmentSize;
-        long readTo = Math.min(readFrom + maxFragmentSize, size) - 1;
-        String range = "bytes=" + readFrom + "-" + readTo;
+        var readFrom = (long) fragmentIndex * maxFragmentSize;
+        var readTo = Math.min(readFrom + maxFragmentSize, size) - 1;
+        var range = "bytes=" + readFrom + "-" + readTo;
         logger.debug("byte range for {} is '{}'", path.getKey(), range);
 
         return client.getObject(
-                        builder -> builder
-                                .bucket(path.bucketName())
-                                .key(path.getKey())
-                                .range(range),
-                        AsyncResponseTransformer.toBytes())
-                .thenApply(BytesWrapper::asByteBuffer);
+                builder -> builder
+                    .bucket(path.bucketName())
+                    .key(path.getKey())
+                    .range(range),
+                AsyncResponseTransformer.toBytes())
+            .thenApply(BytesWrapper::asByteBuffer);
     }
 
     /**

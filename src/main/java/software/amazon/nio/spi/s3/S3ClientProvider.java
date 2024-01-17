@@ -5,10 +5,21 @@
 
 package software.amazon.nio.spi.s3;
 
+
+import static java.util.concurrent.TimeUnit.MINUTES;
+import static software.amazon.nio.spi.s3.util.TimeOutUtils.TIMEOUT_TIME_LENGTH_1;
+import static software.amazon.nio.spi.s3.util.TimeOutUtils.logAndGenerateExceptionOnTimeOut;
+
+import java.io.IOException;
+import java.net.URI;
+import java.time.Duration;
+import java.util.NoSuchElementException;
+import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import software.amazon.awssdk.auth.credentials.AwsCredentials;
-import software.amazon.awssdk.awscore.AwsClient;
 import software.amazon.awssdk.core.exception.ApiCallAttemptTimeoutException;
 import software.amazon.awssdk.core.exception.ApiCallTimeoutException;
 import software.amazon.awssdk.core.exception.RetryableException;
@@ -23,83 +34,68 @@ import software.amazon.awssdk.http.HttpStatusCode;
 import software.amazon.awssdk.http.SdkHttpResponse;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
-import software.amazon.awssdk.services.s3.S3BaseClientBuilder;
-import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.S3AsyncClientBuilder;
 import software.amazon.awssdk.services.s3.S3CrtAsyncClientBuilder;
-import software.amazon.awssdk.services.s3.model.HeadBucketResponse;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.nio.spi.s3.config.S3NioSpiConfiguration;
-
-import java.io.IOException;
-import java.net.URI;
-import java.time.Duration;
-import java.util.NoSuchElementException;
-import java.util.Set;
-import java.util.function.Function;
 
 /**
  * Factory/builder class that creates sync and async S3 clients. It also provides
  * default clients that can be used for basic operations (e.g. bucket discovery).
- *
  */
 public class S3ClientProvider {
 
-    /**
-     * Default S3CrtAsyncClientBuilder
-     */
-    protected S3CrtAsyncClientBuilder asyncClientBuilder = S3AsyncClient.crtBuilder();
-
-    /**
-     * Configuration
-     */
-    final protected S3NioSpiConfiguration configuration;
-
-    /**
-     * Default client using the "<a href="https://s3.us-east-1.amazonaws.com">...</a>" endpoint
-     */
-    private static final S3Client DEFAULT_CLIENT = S3Client.builder()
-            .endpointOverride(URI.create("https://s3.us-east-1.amazonaws.com"))
-            .region(Region.US_EAST_1)
-            .build();
+    private static final Logger logger = LoggerFactory.getLogger(S3ClientProvider.class);
 
     /**
      * Default asynchronous client using the "<a href="https://s3.us-east-1.amazonaws.com">...</a>" endpoint
      */
-    private static final S3AsyncClient DEFAULT_ASYNC_CLIENT = S3AsyncClient.builder()
-            .endpointOverride(URI.create("https://s3.us-east-1.amazonaws.com"))
-            .region(Region.US_EAST_1)
-            .build();
+    private static final S3AsyncClient DEFAULT_CLIENT = S3AsyncClient.builder()
+        .endpointOverride(URI.create("https://s3.us-east-1.amazonaws.com"))
+        .crossRegionAccessEnabled(true)
+        .region(Region.US_EAST_1)
+        .build();
 
-    private final EqualJitterBackoffStrategy backoffStrategy = EqualJitterBackoffStrategy.builder()
-            .baseDelay(Duration.ofMillis(200L))
-            .maxBackoffTime(Duration.ofSeconds(5L))
-            .build();
+    /**
+     * Configuration
+     */
+    protected final S3NioSpiConfiguration configuration;
+
+    /**
+     * Default S3CrtAsyncClientBuilder
+     */
+    protected S3CrtAsyncClientBuilder asyncClientBuilder =
+            S3AsyncClient.crtBuilder()
+                    .crossRegionAccessEnabled(true);
 
     final RetryCondition retryCondition;
 
+    private final EqualJitterBackoffStrategy backoffStrategy = EqualJitterBackoffStrategy.builder()
+        .baseDelay(Duration.ofMillis(200L))
+        .maxBackoffTime(Duration.ofSeconds(5L))
+        .build();
+
     {
-        final Set<Integer> RETRYABLE_STATUS_CODES = Set.of(
-                HttpStatusCode.INTERNAL_SERVER_ERROR,
-                HttpStatusCode.BAD_GATEWAY,
-                HttpStatusCode.SERVICE_UNAVAILABLE,
-                HttpStatusCode.GATEWAY_TIMEOUT
+        final var retryableStatusCodes = Set.of(
+            HttpStatusCode.INTERNAL_SERVER_ERROR,
+            HttpStatusCode.BAD_GATEWAY,
+            HttpStatusCode.SERVICE_UNAVAILABLE,
+            HttpStatusCode.GATEWAY_TIMEOUT
         );
 
-        final Set<Class<? extends Exception>> RETRYABLE_EXCEPTIONS = Set.of(
-                RetryableException.class,
-                IOException.class,
-                ApiCallAttemptTimeoutException.class,
-                ApiCallTimeoutException.class);
+        final var retryableExceptions = Set.of(
+            RetryableException.class,
+            IOException.class,
+            ApiCallAttemptTimeoutException.class,
+            ApiCallTimeoutException.class);
 
         retryCondition = OrRetryCondition.create(
-                RetryOnStatusCodeCondition.create(RETRYABLE_STATUS_CODES),
-                RetryOnExceptionsCondition.create(RETRYABLE_EXCEPTIONS),
-                RetryOnClockSkewCondition.create(),
-                RetryOnThrottlingCondition.create()
+            RetryOnStatusCodeCondition.create(retryableStatusCodes),
+            RetryOnExceptionsCondition.create(retryableExceptions),
+            RetryOnClockSkewCondition.create(),
+            RetryOnThrottlingCondition.create()
         );
     }
-
-    static private final Logger logger = LoggerFactory.getLogger(S3ClientProvider.class);
 
     public S3ClientProvider(S3NioSpiConfiguration c) {
         this.configuration = (c == null) ? new S3NioSpiConfiguration() : c;
@@ -117,21 +113,10 @@ public class S3ClientProvider {
      *
      * @return a S3Client not bound to a region
      */
-    S3Client universalClient() {
-        return universalClient(false);
+    S3AsyncClient universalClient() {
+        return DEFAULT_CLIENT;
     }
 
-    /**
-     * This method returns a universal client (i.e.not bound to any region)
-     * that can be used by certain S3 operations for discovery
-     *
-     * @param async true to return an asynchronous client, false otherwise
-     * @param <T>   type of AwsClient
-     * @return a S3Client not bound to a region
-     */
-    <T extends AwsClient> T universalClient(boolean async) {
-        return (T) ((async) ? DEFAULT_ASYNC_CLIENT : DEFAULT_CLIENT);
-    }
 
     /**
      * Generates a sync client for the named bucket using the provided location
@@ -141,22 +126,14 @@ public class S3ClientProvider {
      * @param crt    whether to return a CRT async client or not
      * @return an S3 client appropriate for the region of the named bucket
      */
-    protected S3AsyncClient generateAsyncClient(String bucket, boolean crt) {
-        return generateAsyncClient(bucket, universalClient(), crt);
+    protected S3AsyncClient generateClient(String bucket, boolean crt) {
+        try {
+            return generateClient(bucket, universalClient(), crt);
+        } catch (ExecutionException | InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
-    /**
-     * Generate a client for the named bucket using a provided client to
-     * determine the location of the named client
-     *
-     * @param bucketName     the name of the bucket to make the client for
-     * @param locationClient the client used to determine the location of the
-     *                       named bucket, recommend using DEFAULT_CLIENT
-     * @return an S3 client appropriate for the region of the named bucket
-     */
-    S3Client generateSyncClient(String bucketName, S3Client locationClient) {
-        return getClientForBucket(bucketName, locationClient, this::clientForRegion);
-    }
 
     /**
      * Generate an async  client for the named bucket using a provided client to
@@ -168,41 +145,46 @@ public class S3ClientProvider {
      * @param crt            whether to return a CRT async client or not
      * @return an S3 client appropriate for the region of the named bucket
      */
-    S3AsyncClient generateAsyncClient(String bucketName, S3Client locationClient, boolean crt) {
+    S3AsyncClient generateClient(String bucketName, S3AsyncClient locationClient, boolean crt)
+            throws ExecutionException, InterruptedException {
         return getClientForBucket(bucketName, locationClient, (region) -> asyncClientForRegion(region, crt));
     }
 
-    private <T extends AwsClient> T getClientForBucket(
-            String bucketName,
-            S3Client locationClient,
-            Function<String, T> getClientForRegion
-    ) {
+    private S3AsyncClient getClientForBucket(
+        String bucketName,
+        S3AsyncClient locationClient,
+        Function<String, S3AsyncClient> getClientForRegion
+    ) throws ExecutionException, InterruptedException {
         logger.debug("generating client for bucket: '{}'", bucketName);
-        T bucketSpecificClient = null;
+        S3AsyncClient bucketSpecificClient = null;
 
-        if (configuration.endpointURI() == null) {
+        if (configuration.endpointUri() == null) {
             // we try to locate a bucket only if no endpoint is provided, which means we are dealing with AWS S3 buckets
-            String bucketLocation = determineBucketLocation(bucketName, locationClient);
+            var bucketLocation = determineBucketLocation(bucketName, locationClient);
 
-            if ( bucketLocation != null) {
+            if (bucketLocation != null) {
                 bucketSpecificClient = getClientForRegion.apply(bucketLocation);
             } else {
                 // if here, no S3 nor other client has been created yet, and we do not
                 // have a location; we'll let it figure out from the profile region
-                logger.warn("Unable to determine the region of bucket: '{}'. Generating a client for the profile region.", bucketName);
+                logger.warn("Unable to determine the region of bucket: '{}'. Generating a client for the profile region.",
+                    bucketName);
             }
         }
 
         return (bucketSpecificClient != null)
-                ? bucketSpecificClient
-                : getClientForRegion.apply(configuration.getRegion());
+            ? bucketSpecificClient
+            : getClientForRegion.apply(configuration.getRegion());
     }
 
-    private String determineBucketLocation(String bucketName, S3Client locationClient) {
+    private String determineBucketLocation(String bucketName, S3AsyncClient locationClient)
+            throws ExecutionException, InterruptedException {
         try {
             return getBucketLocation(bucketName, locationClient);
-        } catch (S3Exception e) {
-            if(isForbidden(e)) {
+        } catch (ExecutionException  e) {
+            if (e.getCause() instanceof S3Exception && isForbidden((S3Exception) e.getCause())) {
+
+                logger.debug("Cannot determine location of '{}' bucket directly", bucketName);
                 return getBucketLocationFromHead(bucketName, locationClient);
             } else {
                 throw e;
@@ -210,36 +192,55 @@ public class S3ClientProvider {
         }
     }
 
-    private String getBucketLocation(String bucketName, S3Client locationClient) {
+    private String getBucketLocation(String bucketName, S3AsyncClient locationClient)
+            throws ExecutionException, InterruptedException {
         logger.debug("determining bucket location with getBucketLocation");
-        return locationClient.getBucketLocation(builder -> builder.bucket(bucketName)).locationConstraintAsString();
-    }
-
-    private String getBucketLocationFromHead(String bucketName, S3Client locationClient) {
         try {
-            logger.debug("Cannot determine location of '{}' bucket directly. Attempting to obtain bucket location with headBucket operation", bucketName);
-            final HeadBucketResponse headBucketResponse = locationClient.headBucket(builder -> builder.bucket(bucketName));
-            return getBucketRegionFromResponse(headBucketResponse.sdkHttpResponse());
-        } catch (S3Exception e) {
-            if (isRedirect(e)) {
-                return getBucketRegionFromResponse(e.awsErrorDetails().sdkHttpResponse());
-            } else {
-                throw e;
-            }
+            return locationClient.getBucketLocation(builder -> builder.bucket(bucketName))
+                    .get(TIMEOUT_TIME_LENGTH_1, MINUTES).locationConstraintAsString();
+        } catch (TimeoutException e) {
+            throw logAndGenerateExceptionOnTimeOut(
+                    logger,
+                    "generateClient",
+                    TIMEOUT_TIME_LENGTH_1,
+                    MINUTES);
         }
     }
 
-    private boolean isForbidden(S3Exception e) { return e.statusCode() == 403; }
-    private boolean isRedirect(S3Exception e) { return e.statusCode() == 301; }
+    private String getBucketLocationFromHead(String bucketName, S3AsyncClient locationClient)
+            throws ExecutionException, InterruptedException {
+        try {
+            logger.debug("Attempting to obtain bucket '{}' location with headBucket operation", bucketName);
+            final var headBucketResponse = locationClient.headBucket(builder -> builder.bucket(bucketName));
+            return getBucketRegionFromResponse(headBucketResponse.get(TIMEOUT_TIME_LENGTH_1, MINUTES).sdkHttpResponse());
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof S3Exception && isRedirect((S3Exception) e.getCause())) {
+                var s3e = (S3Exception) e.getCause();
+                return getBucketRegionFromResponse(s3e.awsErrorDetails().sdkHttpResponse());
+            } else {
+                throw e;
+            }
+        } catch (TimeoutException e) {
+            throw logAndGenerateExceptionOnTimeOut(
+                    logger,
+                    "generateClient",
+                    TIMEOUT_TIME_LENGTH_1,
+                    MINUTES);
+        }
+    }
+
+    private boolean isForbidden(S3Exception e) {
+        return e.statusCode() == 403;
+    }
+
+    private boolean isRedirect(S3Exception e) {
+        return e.statusCode() == 301;
+    }
 
     private String getBucketRegionFromResponse(SdkHttpResponse response) {
         return response.firstMatchingHeader("x-amz-bucket-region").orElseThrow(() ->
             new NoSuchElementException("Head Bucket Response doesn't include the header 'x-amz-bucket-region'")
         );
-    }
-
-    private S3Client clientForRegion(String regionName) {
-        return configureClientForRegion(regionName, S3Client.builder());
     }
 
     private S3AsyncClient asyncClientForRegion(String regionName, boolean crt) {
@@ -249,28 +250,28 @@ public class S3ClientProvider {
         return configureCrtClientForRegion(regionName);
     }
 
-    private <ActualClient extends AwsClient, ActualBuilder extends S3BaseClientBuilder<ActualBuilder, ActualClient>> ActualClient configureClientForRegion(
-            String regionName,
-            S3BaseClientBuilder<ActualBuilder, ActualClient> builder)
-    {
-        Region region = getRegionFromRegionName(regionName);
+    private S3AsyncClient configureClientForRegion(
+        String regionName,
+        S3AsyncClientBuilder builder
+    ) {
+        var region = getRegionFromRegionName(regionName);
         logger.debug("bucket region is: '{}'", region.id());
 
         builder
-                .forcePathStyle(configuration.getForcePathStyle())
-                .region(region)
-                .overrideConfiguration(
-                        conf -> conf.retryPolicy(
-                                configBuilder -> configBuilder.retryCondition(retryCondition).backoffStrategy(backoffStrategy)
-                        )
-                );
+            .forcePathStyle(configuration.getForcePathStyle())
+            .region(region)
+            .overrideConfiguration(
+                conf -> conf.retryPolicy(
+                    configBuilder -> configBuilder.retryCondition(retryCondition).backoffStrategy(backoffStrategy)
+                )
+            );
 
-        URI endpointUri = configuration.endpointURI();
+        var endpointUri = configuration.endpointUri();
         if (endpointUri != null) {
             builder.endpointOverride(endpointUri);
         }
 
-        AwsCredentials credentials = configuration.getCredentials();
+        var credentials = configuration.getCredentials();
         if (credentials != null) {
             builder.credentialsProvider(() -> credentials);
         }
@@ -279,20 +280,22 @@ public class S3ClientProvider {
     }
 
     private S3AsyncClient configureCrtClientForRegion(String regionName) {
-        Region region = getRegionFromRegionName(regionName);
+        var region = getRegionFromRegionName(regionName);
         logger.debug("bucket region is: '{}'", region.id());
 
-        URI endpointUri = configuration.endpointURI();
+        var endpointUri = configuration.endpointUri();
         if (endpointUri != null) {
             asyncClientBuilder.endpointOverride(endpointUri);
         }
 
-        AwsCredentials credentials = configuration.getCredentials();
+        var credentials = configuration.getCredentials();
         if (credentials != null) {
             asyncClientBuilder.credentialsProvider(() -> credentials);
         }
 
-        return asyncClientBuilder.forcePathStyle(configuration.getForcePathStyle()).region(region).build();
+        return asyncClientBuilder.forcePathStyle(configuration.getForcePathStyle())
+                .region(region)
+                .build();
     }
 
     private static Region getRegionFromRegionName(String regionName) {

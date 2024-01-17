@@ -1,5 +1,11 @@
+/*
+ * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package software.amazon.nio.spi.s3;
 
+import java.io.IOException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,15 +19,18 @@ import org.junit.jupiter.params.provider.MethodSource;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.nio.spi.s3.config.S3NioSpiConfiguration;
+import software.amazon.nio.spi.s3.util.TimeOutUtils;
 
 import java.nio.file.attribute.FileTime;
 import java.nio.file.spi.FileSystemProvider;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
@@ -40,15 +49,15 @@ public class S3BasicFileAttributesTest {
         private S3BasicFileAttributes directoryAttributes;
 
         @BeforeAll
-        void configureDirectory(){
+        void configureDirectory() throws IOException {
             S3FileSystem fs = mock();
             FileSystemProvider provider = mock();
             when(fs.provider()).thenReturn(provider);
             when(fs.configuration()).thenReturn(new S3NioSpiConfiguration());
             when(provider.getScheme()).thenReturn("s3");
 
-            S3Path directory = S3Path.getPath(fs, "s3://somebucket/somedirectory/");
-            directoryAttributes = new S3BasicFileAttributes(directory);
+            var directory = S3Path.getPath(fs, "/somedirectory/");
+            directoryAttributes = S3BasicFileAttributes.get(directory, Duration.ofMinutes(TimeOutUtils.TIMEOUT_TIME_LENGTH_1));
         }
 
         @Test
@@ -115,7 +124,7 @@ public class S3BasicFileAttributesTest {
         private final S3AsyncClient mockClient = mock();
 
         @BeforeAll
-        void configureRegularFile() {
+        void configureRegularFile() throws IOException {
             S3FileSystem fs = mock();
 
             FileSystemProvider provider = mock();
@@ -126,8 +135,18 @@ public class S3BasicFileAttributesTest {
 
             when(fs.client()).thenReturn(mockClient);
 
-            S3Path file = S3Path.getPath(fs, "s3://somebucket/somefile");
-            attributes = new S3BasicFileAttributes(file);
+            when(mockClient.headObject(anyConsumer())).thenReturn(
+                CompletableFuture.supplyAsync(() ->
+                    HeadObjectResponse.builder()
+                        .lastModified(Instant.parse("2023-11-07T08:29:12.847553Z"))
+                        .contentLength(100L)
+                        .eTag("someEtag")
+                        .build()
+                )
+            );
+
+            var file = S3Path.getPath(fs, "somefile");
+            attributes = S3BasicFileAttributes.get(file, Duration.ofMinutes(TimeOutUtils.TIMEOUT_TIME_LENGTH_1));
         }
 
         @BeforeEach
@@ -139,37 +158,19 @@ public class S3BasicFileAttributesTest {
         @MethodSource("dateGetters")
         @DisplayName("date getter")
         void lastModifiedTime(Function<S3BasicFileAttributes, FileTime> dateGetter) {
-            when(mockClient.headObject(anyConsumer())).thenReturn(
-                    CompletableFuture.supplyAsync(() ->
-                            HeadObjectResponse.builder().lastModified(Instant.parse("2023-11-07T08:29:12.847553Z")).build()
-                    )
-            );
-
-            FileTime expectedFileTime = FileTime.from(Instant.parse("2023-11-07T08:29:12.847553Z"));
+            var expectedFileTime = FileTime.from(Instant.parse("2023-11-07T08:29:12.847553Z"));
             assertThat(dateGetter.apply(attributes)).isEqualTo(expectedFileTime);
         }
 
         @Test
         @DisplayName("size() should return the contentLength from head response")
         void size() {
-            when(mockClient.headObject(anyConsumer())).thenReturn(
-                    CompletableFuture.supplyAsync(() ->
-                            HeadObjectResponse.builder().contentLength(100L).build()
-                    )
-            );
-
             assertThat(attributes.size()).isEqualTo(100L);
         }
 
         @Test
         @DisplayName("fileKey() should return the etag from head response")
         void fileKey() {
-            when(mockClient.headObject(anyConsumer())).thenReturn(
-                    CompletableFuture.supplyAsync(() ->
-                            HeadObjectResponse.builder().eTag("someEtag").build()
-                    )
-            );
-
             assertThat(attributes.fileKey()).isEqualTo("someEtag");
         }
 
@@ -207,6 +208,36 @@ public class S3BasicFileAttributesTest {
                     Arguments.of(Named.of("lastAccessTime", lastAccessTimeGetter))
             );
         }
+    }
+
+    @Test
+    @DisplayName("When a timeout happens getting attributes of a regular file, a RuntimeException should be thrown")
+    void sizeOfFileThrowsWhenTimeout(){
+        FileSystemProvider provider = mock();
+        when(provider.getScheme()).thenReturn("s3");
+
+        S3FileSystem fs = mock();
+        when(fs.provider()).thenReturn(provider);
+        when(fs.configuration()).thenReturn(new S3NioSpiConfiguration());
+
+        S3AsyncClient mockClient = mock();
+        when(fs.client()).thenReturn(mockClient);
+
+        when(mockClient.headObject(anyConsumer())).thenReturn(
+            CompletableFuture.supplyAsync(() -> {
+                try {
+                    Thread.sleep(Duration.ofMinutes(1).toMillis());
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+                return HeadObjectResponse.builder().build();
+                }
+            )
+        );
+
+        assertThatThrownBy(() -> S3BasicFileAttributes.get(S3Path.getPath(fs, "somefile"), Duration.ofMillis(1)))
+            .isInstanceOf(IOException.class)
+            .hasMessageContainingAll("operation timed out", "connectivity", "S3");
     }
 
 }

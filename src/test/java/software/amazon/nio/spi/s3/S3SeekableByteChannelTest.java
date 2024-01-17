@@ -5,6 +5,7 @@
 
 package software.amazon.nio.spi.s3;
 
+import java.time.Instant;
 import org.mockito.Mock;
 import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
@@ -17,12 +18,14 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.OpenOption;
-import java.nio.file.StandardOpenOption;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.AfterEach;
+
+import static java.nio.file.StandardOpenOption.CREATE;
+import static java.nio.file.StandardOpenOption.READ;
+import static java.nio.file.StandardOpenOption.WRITE;
 import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -51,14 +54,17 @@ public class S3SeekableByteChannelTest {
         // forward to the method that uses the HeadObjectRequest parameter
         lenient().when(mockClient.headObject(anyConsumer())).thenCallRealMethod();
         lenient().when(mockClient.headObject(any(HeadObjectRequest.class))).thenReturn(
-                CompletableFuture.supplyAsync(() -> HeadObjectResponse.builder().contentLength(100L).build()));
+                CompletableFuture.completedFuture(
+                    HeadObjectResponse.builder().contentLength(100L).lastModified(Instant.now()).build()
+                )
+        );
         lenient().when(mockClient.getObject(anyConsumer(), any(AsyncResponseTransformer.class))).thenCallRealMethod();
         lenient().when(mockClient.getObject(any(GetObjectRequest.class), any(AsyncResponseTransformer.class))).thenReturn(
                 CompletableFuture.supplyAsync(() -> ResponseBytes.fromByteArray(
                         GetObjectResponse.builder().contentLength(6L).build(),
                         bytes)));
 
-        S3FileSystemProvider provider = new S3FileSystemProvider();
+        var provider = new S3FileSystemProvider();
         fs = provider.getFileSystem(URI.create("s3://test-bucket"), true);
         fs.clientProvider(new FixedS3ClientProvider(mockClient));
         path = (S3Path) fs.getPath("/object");
@@ -71,15 +77,15 @@ public class S3SeekableByteChannelTest {
 
     @Test
     public void readDelegateConstructedByDefault() throws IOException {
-        try(S3SeekableByteChannel channel = seekableByteChannelForRead()) {
+        try(var channel = seekableByteChannelForRead()) {
             assertNotNull(channel.getReadDelegate());
         }
     }
 
     @Test
     public void read() throws IOException {
-        try(S3SeekableByteChannel channel = seekableByteChannelForRead()) {
-            ByteBuffer dst = ByteBuffer.allocate(6);
+        try(var channel = seekableByteChannelForRead()) {
+            var dst = ByteBuffer.allocate(6);
             channel.read(dst);
             assertArrayEquals(bytes, dst.array());
             assertEquals(6L, channel.position());
@@ -91,24 +97,21 @@ public class S3SeekableByteChannelTest {
         when(mockClient.headObject(any(HeadObjectRequest.class))).thenThrow(NoSuchKeyException.class);
         when(mockClient.putObject(any(PutObjectRequest.class), any(AsyncRequestBody.class))).thenReturn(CompletableFuture.supplyAsync(() ->
                 PutObjectResponse.builder().build()));
-        Set<OpenOption> options = new HashSet<>();
-        options.add(StandardOpenOption.CREATE);
-        options.add(StandardOpenOption.WRITE);
-        S3SeekableByteChannel channel = new S3SeekableByteChannel(path, mockClient, options);
-        channel.write(ByteBuffer.allocate(1));
-        channel.close();
+        try(var channel = new S3SeekableByteChannel(path, mockClient, Set.<OpenOption>of(CREATE, WRITE))){
+            channel.write(ByteBuffer.allocate(1));
+        }
     }
 
     @Test
     public void position() throws IOException {
-        try(S3SeekableByteChannel channel = seekableByteChannelForRead()) {
+        try(var channel = seekableByteChannelForRead()) {
             assertEquals(0L, channel.position());
         }
     }
 
     @Test
     public void testPosition() throws IOException {
-        try(S3SeekableByteChannel channel = seekableByteChannelForRead()) {
+        try(var channel = seekableByteChannelForRead()) {
             channel.position(1L);
             assertEquals(1L, channel.position());
         }
@@ -116,34 +119,34 @@ public class S3SeekableByteChannelTest {
 
     @Test
     public void size() throws IOException {
-        try(S3SeekableByteChannel channel = seekableByteChannelForRead()) {
+        try(var channel = seekableByteChannelForRead()) {
             assertEquals(100L, channel.size());
         }
     }
 
     @Test
     public void truncate() throws IOException {
-        try(S3SeekableByteChannel channel = seekableByteChannelForRead()) {
+        try(var channel = seekableByteChannelForRead()) {
             assertThrows(UnsupportedOperationException.class, () -> channel.truncate(0L));
         }
     }
 
     @Test
     public void isOpen() throws IOException {
-        try(S3SeekableByteChannel channel = seekableByteChannelForRead()) {
+        try(var channel = seekableByteChannelForRead()) {
             assertTrue(channel.isOpen());
         }
     }
 
     @Test
     public void close() throws IOException {
-        S3SeekableByteChannel channel = seekableByteChannelForRead();
+        var channel = seekableByteChannelForRead();
         channel.close();
         assertFalse(channel.isOpen());
     }
 
     private S3SeekableByteChannel seekableByteChannelForRead() throws IOException {
-        return new S3SeekableByteChannel(path, mockClient, Collections.singleton(StandardOpenOption.READ));
+        return new S3SeekableByteChannel(path, mockClient, Collections.singleton(READ));
     }
 
 }

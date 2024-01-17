@@ -1,17 +1,6 @@
 /*
- * Copyright 2023 ste.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package software.amazon.nio.spi.s3;
@@ -42,9 +31,9 @@ public class S3XFileSystemProviderTest {
 
     @Test
     public void nio_provider() {
-        S3Path path = (S3Path)Paths.get(URI.create("s3x://myendpoint/mybucket/myfolder"));
+        var path = (S3Path)Paths.get(URI.create("s3x://myendpoint/mybucket/myfolder"));
 
-        S3FileSystem fs = path.getFileSystem();
+        var fs = path.getFileSystem();
         then(fs.provider()).isInstanceOf(S3XFileSystemProvider.class);
         then(fs.configuration().getEndpoint()).isEqualTo("myendpoint");
         then(fs.configuration().getBucketName()).isEqualTo("mybucket");
@@ -69,7 +58,7 @@ public class S3XFileSystemProviderTest {
 
     @Test
     public void getFileSystem() {
-        S3XFileSystemProvider provider = new S3XFileSystemProvider();
+        var provider = new S3XFileSystemProvider();
 
         FileSystem fs2 = provider.getFileSystem(URI1, true);
         then(provider.getFileSystem(URI1)).isSameAs(fs2);
@@ -89,11 +78,11 @@ public class S3XFileSystemProviderTest {
 
     @Test
     public void setCredentialsThroughURI() throws Exception {
-        S3XFileSystemProvider p = new S3XFileSystemProvider();
+        var p = new S3XFileSystemProvider();
         restoreSystemProperties(() -> {
             System.setProperty("aws.region", "us-west-1");
 
-            S3FileSystem fs = p.getFileSystem(URI.create("s3://urikey:urisecret@some.where.com:1010/bucket"), true);
+            var fs = p.getFileSystem(URI.create("s3://urikey:urisecret@some.where.com:1010/bucket"), true);
             fs.clientProvider().asyncClientBuilder(BUILDER);
             fs.client(); fs.close();
 
@@ -107,7 +96,7 @@ public class S3XFileSystemProviderTest {
 
     @Test
     public void getPath() {
-        S3XFileSystemProvider p = new S3XFileSystemProvider();
+        var p = new S3XFileSystemProvider();
         then(p.getPath(URI1)).isNotNull();
 
         // Make sure a file system is created if not already done (if the file

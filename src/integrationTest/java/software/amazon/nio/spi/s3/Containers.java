@@ -1,8 +1,16 @@
+/*
+ * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package software.amazon.nio.spi.s3;
 
-import org.testcontainers.containers.Container;
 import org.testcontainers.containers.localstack.LocalStackContainer;
 import org.testcontainers.utility.DockerImageName;
+
+import java.net.URI;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -23,29 +31,31 @@ abstract class Containers {
 
     public static void createBucket(String name) {
         assertThatCode(() -> {
-            Container.ExecResult execResult = LOCAL_STACK_CONTAINER.execInContainer(("awslocal s3api create-bucket --bucket " + name).split(" "));
+            var execResult = LOCAL_STACK_CONTAINER.execInContainer(("awslocal s3api create-bucket --bucket " + name).split(" "));
             assertThat(execResult.getExitCode()).isZero();
         }).as("Failed to create bucket '%s'", name)
          .doesNotThrowAnyException();
     }
 
-    public static void putObject(String bucket, String key) {
+    public static Path putObject(String bucket, String key) {
         assertThatCode(() -> {
-            Container.ExecResult execResult = LOCAL_STACK_CONTAINER.execInContainer(("awslocal s3api put-object --bucket " + bucket + " --key " + key).split(" "));
+            var execResult = LOCAL_STACK_CONTAINER.execInContainer(("awslocal s3api put-object --bucket " + bucket + " --key " + key).split(" "));
             assertThat(execResult.getExitCode()).isZero();
         }).as("Failed to put object '%s' in bucket '%s'", key, bucket)
          .doesNotThrowAnyException();
+        return Paths.get(URI.create(String.format("%s/%s/%s", localStackConnectionEndpoint(), bucket, key)));
     }
 
-    public static void putObject(String bucket, String key, String content) {
+    public static Path putObject(String bucket, String key, String content) {
         assertThatCode(() -> {
-            Container.ExecResult execResultCreateFile = LOCAL_STACK_CONTAINER.execInContainer("sh", "-c", "echo -n '" + content + "' > " + key);
-            Container.ExecResult execResultPut = LOCAL_STACK_CONTAINER.execInContainer(("awslocal s3api put-object --bucket " + bucket + " --key " + key + " --body " + key).split(" "));
+            var execResultCreateFile = LOCAL_STACK_CONTAINER.execInContainer("sh", "-c", "echo -n '" + content + "' > " + key);
+            var execResultPut = LOCAL_STACK_CONTAINER.execInContainer(("awslocal s3api put-object --bucket " + bucket + " --key " + key + " --body " + key).split(" "));
 
             assertThat(execResultCreateFile.getExitCode()).isZero();
             assertThat(execResultPut.getExitCode()).withFailMessage("Failed put: %s ", execResultPut.getStderr()).isZero();
         }).as("Failed to put object '%s' in bucket '%s'", key, bucket)
                 .doesNotThrowAnyException();
+        return Paths.get(URI.create(String.format("%s/%s/%s", localStackConnectionEndpoint(), bucket, key)));
     }
 
     public static String localStackConnectionEndpoint() {
@@ -53,8 +63,8 @@ abstract class Containers {
     }
 
     public static String localStackConnectionEndpoint(String key, String secret) {
-        String accessKey = key != null ? key : LOCAL_STACK_CONTAINER.getAccessKey();
-        String secretKey = secret != null ? secret : LOCAL_STACK_CONTAINER.getSecretKey();
+        var accessKey = key != null ? key : LOCAL_STACK_CONTAINER.getAccessKey();
+        var secretKey = secret != null ? secret : LOCAL_STACK_CONTAINER.getSecretKey();
         return String.format("s3x://%s:%s@%s", accessKey, secretKey, localStackHost());
     }
 

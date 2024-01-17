@@ -5,11 +5,6 @@
 
 package software.amazon.nio.spi.s3;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import software.amazon.awssdk.services.s3.S3AsyncClient;
-import software.amazon.nio.spi.s3.config.S3NioSpiConfiguration;
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
@@ -20,8 +15,14 @@ import java.nio.channels.SeekableByteChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.OpenOption;
 import java.nio.file.StandardOpenOption;
+import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import software.amazon.awssdk.services.s3.S3AsyncClient;
+import software.amazon.nio.spi.s3.config.S3NioSpiConfiguration;
+import software.amazon.nio.spi.s3.util.TimeOutUtils;
 
 class S3SeekableByteChannel implements SeekableByteChannel {
 
@@ -39,7 +40,8 @@ class S3SeekableByteChannel implements SeekableByteChannel {
         this(s3Path, s3Client, 0L, options, null, null);
     }
 
-    private S3SeekableByteChannel(S3Path s3Path, S3AsyncClient s3Client, long startAt, Set<? extends OpenOption> options, Long timeout, TimeUnit timeUnit) throws IOException {
+    private S3SeekableByteChannel(S3Path s3Path, S3AsyncClient s3Client, long startAt, Set<? extends OpenOption> options,
+                                  Long timeout, TimeUnit timeUnit) throws IOException {
         position = startAt;
         path = s3Path;
         closed = false;
@@ -54,16 +56,19 @@ class S3SeekableByteChannel implements SeekableByteChannel {
 
         // later we will add a constructor that allows providing delegates for composition
 
-        S3NioSpiConfiguration config = new S3NioSpiConfiguration();
+        var config = new S3NioSpiConfiguration();
         if (options.contains(StandardOpenOption.WRITE)) {
             LOGGER.debug("using S3WritableByteChannel as write delegate for path '{}'", s3Path.toUri());
             readDelegate = null;
-            writeDelegate = new S3WritableByteChannel(s3Path, s3Client, options, timeout, timeUnit);
+            var transferUtil = new S3TransferUtil(s3Client, timeout, timeUnit);
+            writeDelegate = new S3WritableByteChannel(s3Path, s3Client, transferUtil, options);
             position = 0L;
         } else if (options.contains(StandardOpenOption.READ) || options.isEmpty()) {
             LOGGER.debug("using S3ReadAheadByteChannel as read delegate for path '{}'", s3Path.toUri());
-            S3AsyncClient readClient = s3Path.getFileSystem().readClient();
-            readDelegate = new S3ReadAheadByteChannel(s3Path, config.getMaxFragmentSize(), config.getMaxFragmentNumber(), readClient, this, timeout, timeUnit);
+            var readClient = s3Path.getFileSystem().readClient();
+            readDelegate =
+                new S3ReadAheadByteChannel(s3Path, config.getMaxFragmentSize(), config.getMaxFragmentNumber(), readClient, this,
+                    timeout, timeUnit);
             writeDelegate = null;
         } else {
             throw new IOException("Invalid channel mode");
@@ -114,7 +119,7 @@ class S3SeekableByteChannel implements SeekableByteChannel {
             throw new NonWritableChannelException();
         }
 
-        int length = src.remaining();
+        var length = src.remaining();
         this.position += length;
 
         return writeDelegate.write(src);
@@ -161,8 +166,9 @@ class S3SeekableByteChannel implements SeekableByteChannel {
      */
     @Override
     public SeekableByteChannel position(long newPosition) throws IOException {
-        if (newPosition < 0)
+        if (newPosition < 0) {
             throw new IllegalArgumentException("newPosition cannot be < 0");
+        }
 
         if (!isOpen()) {
             throw new ClosedChannelException();
@@ -195,9 +201,9 @@ class S3SeekableByteChannel implements SeekableByteChannel {
         return this.size;
     }
 
-    private void fetchSize() {
+    private void fetchSize() throws IOException {
         synchronized (this) {
-            this.size = new S3BasicFileAttributes(path).size();
+            this.size = S3BasicFileAttributes.get(path, Duration.ofMinutes(TimeOutUtils.TIMEOUT_TIME_LENGTH_1)).size();
             LOGGER.debug("size of '{}' is '{}'", path.toUri(), this.size);
         }
     }
@@ -273,6 +279,7 @@ class S3SeekableByteChannel implements SeekableByteChannel {
 
     /**
      * Access the underlying {@code ReadableByteChannel} used for reading
+     *
      * @return the channel. May be null if opened for writing only
      */
     ReadableByteChannel getReadDelegate() {
@@ -281,6 +288,7 @@ class S3SeekableByteChannel implements SeekableByteChannel {
 
     /**
      * Access the underlying {@code WritableByteChannel} used for writing
+     *
      * @return the channel. May be null if opened for reading only
      */
     WritableByteChannel getWriteDelegate() {

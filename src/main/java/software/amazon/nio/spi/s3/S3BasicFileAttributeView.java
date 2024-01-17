@@ -5,15 +5,18 @@
 
 package software.amazon.nio.spi.s3;
 
+import java.io.IOException;
 import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
+import java.time.Duration;
+import software.amazon.nio.spi.s3.util.TimeOutUtils;
 
 class S3BasicFileAttributeView implements BasicFileAttributeView {
 
     private final S3Path path;
 
-    S3BasicFileAttributeView(S3Path path){
+    S3BasicFileAttributeView(S3Path path) {
         this.path = path;
     }
 
@@ -25,6 +28,7 @@ class S3BasicFileAttributeView implements BasicFileAttributeView {
     public String name() {
         return "s3";
     }
+
     /**
      * Reads the basic file attributes as a bulk operation.
      *
@@ -34,8 +38,8 @@ class S3BasicFileAttributeView implements BasicFileAttributeView {
      * @return the file attributes
      */
     @Override
-    public BasicFileAttributes readAttributes() {
-        return new S3BasicFileAttributes(path);
+    public BasicFileAttributes readAttributes() throws IOException {
+        return S3BasicFileAttributes.get(path, Duration.ofMinutes(TimeOutUtils.TIMEOUT_TIME_LENGTH_1));
     }
 
     /**
@@ -43,7 +47,8 @@ class S3BasicFileAttributeView implements BasicFileAttributeView {
      */
     @Override
     public void setTimes(FileTime lastModifiedTime, FileTime lastAccessTime, FileTime createTime) {
-        throw new UnsupportedOperationException("write operations are not supported, please submitted a feature request explaining your use case");
+        throw new UnsupportedOperationException(
+            "write operations are not supported, please submitted a feature request explaining your use case");
     }
 
 }
