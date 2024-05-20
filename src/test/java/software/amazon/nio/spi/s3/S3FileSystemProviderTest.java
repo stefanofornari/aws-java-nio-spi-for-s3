@@ -90,7 +90,7 @@ public class S3FileSystemProviderTest {
         provider = new S3FileSystemProvider();
         lenient().when(mockClient.headObject(anyConsumer())).thenReturn(
                 CompletableFuture.supplyAsync(() -> HeadObjectResponse.builder().contentLength(100L).build()));
-        fs = provider.getFileSystem(URI.create(pathUri), true);
+        fs = (S3FileSystem) provider.getFileSystem(URI.create(pathUri));
         fs.clientProvider(new FixedS3ClientProvider(mockClient));
     }
 
@@ -131,7 +131,7 @@ public class S3FileSystemProviderTest {
         //
         // New AWS S3 file system
         //
-        var cfs = provider.getFileSystem(URI.create("s3://foo2/baa"), true);
+        var cfs = provider.getFileSystem(URI.create("s3://foo2/baa"));
         var gfs = provider.getFileSystem(URI.create("s3://foo2"));
         assertNotSame(fs, gfs); assertSame(cfs, gfs);
         gfs = provider.getFileSystem(URI.create("s3://foo2"));
@@ -141,26 +141,18 @@ public class S3FileSystemProviderTest {
         //
         // New AWS S3 file system with same bucket but different path
         //
-        cfs = provider.getFileSystem(URI.create("s3://foo3"), true);
+        cfs = provider.getFileSystem(URI.create("s3://foo3"));
         gfs = provider.getFileSystem(URI.create("s3://foo3/dir"));
         assertNotSame(fs, gfs); assertSame(cfs, gfs);
         gfs = provider.getFileSystem(URI.create("s3://foo3/dir"));
         assertNotSame(fs, gfs); assertSame(cfs, gfs);
         provider.closeFileSystem(cfs);
-
-        assertThrows(
-            FileSystemNotFoundException.class, () -> provider.getFileSystem(URI.create("s3://nobucket"))
-        );
     }
 
     @Test
     public void closingFileSystemDiscardsItFromCache() {
         provider.closeFileSystem(fs);
-
-        assertThrows(
-            FileSystemNotFoundException.class,
-            () -> provider.getFileSystem(URI.create(pathUri))
-        );
+        assertFalse(provider.getFsCache().containsKey(pathUri));
     }
 
     @Test
@@ -338,8 +330,8 @@ public class S3FileSystemProviderTest {
         when(mockClient.copyObject(any(CopyObjectRequest.class))).thenReturn(CompletableFuture.supplyAsync(() ->
                 CopyObjectResponse.builder().build()));
 
-        var dir1 = fs.getPath("/dir1");
-        var dir2 = fs.getPath("/dir2");
+        var dir1 = fs.getPath("/dir1/");
+        var dir2 = fs.getPath("/dir2/");
         assertThrows(FileAlreadyExistsException.class, () -> provider.copy(dir1, dir2));
         provider.copy(dir1, dir2, StandardCopyOption.REPLACE_EXISTING);
 
@@ -370,8 +362,8 @@ public class S3FileSystemProviderTest {
         when(mockClient.deleteObjects(any(DeleteObjectsRequest.class))).thenReturn(CompletableFuture.supplyAsync(() ->
                 DeleteObjectsResponse.builder().build()));
 
-        var dir1 = fs.getPath("/dir1");
-        var dir2 = fs.getPath("/dir2");
+        var dir1 = fs.getPath("/dir1/");
+        var dir2 = fs.getPath("/dir2/");
         assertThrows(FileAlreadyExistsException.class, () -> provider.move(dir1, dir2));
         provider.move(dir1, dir2, StandardCopyOption.REPLACE_EXISTING);
 

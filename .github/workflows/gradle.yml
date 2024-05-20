@@ -7,9 +7,6 @@
 
 name: Java CI with Gradle
 
-env:
-  AWS_REGION: 'us-east-1'
-
 on:
   push:
     branches: [ "main" ]
@@ -35,10 +32,6 @@ jobs:
 
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
-
-    # Temporary until release of v2
-    - name: Accept breaking changes
-      run: ./gradlew :revapiAcceptAllBreaks --justification 'Changes for v2'
 
     - name: Execute Gradle build
       run: ./gradlew build

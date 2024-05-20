@@ -21,6 +21,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
 import java.nio.file.FileSystem;
+import java.nio.file.FileSystemAlreadyExistsException;
 import java.nio.file.FileSystemNotFoundException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -58,6 +59,8 @@ import software.amazon.awssdk.core.async.AsyncRequestBody;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
+import software.amazon.awssdk.services.s3.model.BucketAlreadyExistsException;
+import software.amazon.awssdk.services.s3.model.BucketAlreadyOwnedByYouException;
 import software.amazon.awssdk.services.s3.model.ChecksumAlgorithm;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.Delete;
@@ -96,6 +99,13 @@ public class S3FileSystemProvider extends FileSystemProvider {
 
     private final Logger logger = LoggerFactory.getLogger(this.getClass().getName());
 
+    /**
+     * Get an unmodifiable copy of the Filesystem Cache. Mainly used for testing purposes.
+     * @return An immutable copy of the filesystem cache.
+     */
+    protected Map<String, S3FileSystem> getFsCache() {
+        return Map.copyOf(FS_CACHE);
+    }
 
     /**
      * Returns the URI scheme that identifies this provider.
@@ -174,11 +184,19 @@ public class S3FileSystemProvider extends FileSystemProvider {
             logger.debug("Create bucket response {}", createBucketResponse.toString());
 
         } catch (ExecutionException e) {
-            throw new IOException(e.getMessage(), e.getCause());
+            if (e.getCause() instanceof BucketAlreadyOwnedByYouException ||
+                    e.getCause() instanceof BucketAlreadyExistsException) {
+                throw new FileSystemAlreadyExistsException(e.getCause().getMessage());
+            } else {
+                throw new IOException(e.getMessage(), e.getCause());
+            }
         } catch (InterruptedException | TimeoutException | SdkException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new IOException(e.getMessage(), e);
         }
-        return getFileSystem(uri, true);
+        return getFileSystem(uri);
     }
 
     /**
@@ -216,7 +234,14 @@ public class S3FileSystemProvider extends FileSystemProvider {
      */
     @Override
     public FileSystem getFileSystem(URI uri) {
-        return getFileSystem(uri, false);
+        var info = fileSystemInfo(uri);
+        return FS_CACHE.computeIfAbsent(info.key(), (key) -> {
+            var config = new S3NioSpiConfiguration().withEndpoint(info.endpoint()).withBucketName(info.bucket());
+            if (info.accessKey() != null) {
+                config.withCredentials(info.accessKey(), info.accessSecret());
+            }
+            return new S3FileSystem(this, config);
+        });
     }
 
     /**
@@ -248,7 +273,7 @@ public class S3FileSystemProvider extends FileSystemProvider {
     @Override
     public Path getPath(URI uri) throws IllegalArgumentException, FileSystemNotFoundException, SecurityException {
         Objects.requireNonNull(uri);
-        return getFileSystem(uri, true).getPath(uri.getScheme() + ":/" + uri.getPath());
+        return getFileSystem(uri).getPath(uri.getScheme() + ":/" + uri.getPath());
     }
 
     /**
@@ -442,16 +467,17 @@ public class S3FileSystemProvider extends FileSystemProvider {
         final var s3Client = s3SourcePath.getFileSystem().client();
         final var sourceBucket = s3SourcePath.bucketName();
 
-        var sourcePrefix = s3SourcePath.toRealPath(NOFOLLOW_LINKS).getKey();
-
         final var timeOut = TIMEOUT_TIME_LENGTH_1;
         final var unit = MINUTES;
 
         var fileExistsAndCannotReplace = cannotReplaceAndFileExistsCheck(options, s3Client);
 
         try {
+            var sourcePrefix = s3SourcePath.toRealPath(NOFOLLOW_LINKS).getKey();
             var sourceKeys = getContainedObjectBatches(s3Client, sourceBucket, sourcePrefix, timeOut, unit);
-            final var prefixWithSeparator = sourcePrefix + PATH_SEPARATOR;
+            final var prefixWithSeparator = s3SourcePath.isDirectory() ? sourcePrefix :
+                    sourcePrefix.substring(0, sourcePrefix.lastIndexOf(PATH_SEPARATOR)) + PATH_SEPARATOR;
+
             try (var s3TransferManager = S3TransferManager.builder().s3Client(s3Client).build()) {
                 for (var keyList : sourceKeys) {
                     for (var objectIdentifier : keyList) {
@@ -758,33 +784,6 @@ public class S3FileSystemProvider extends FileSystemProvider {
         throw new UnsupportedOperationException("s3 file attributes cannot be modified by this class");
     }
 
-    /**
-     * Similar to getFileSystem(uri), but it allows to create the file system if
-     * not yet created.
-     *
-     * @param uri    URI reference
-     * @param create if true, the file system is created if not already done
-     * @return The file system
-     * @throws IllegalArgumentException    If the pre-conditions for the {@code uri} parameter aren't met
-     * @throws FileSystemNotFoundException If the file system does not exist
-     * @throws SecurityException           If a security manager is installed, and it denies an unspecified
-     *                                     permission.
-     */
-    S3FileSystem getFileSystem(URI uri, boolean create) {
-        var info = fileSystemInfo(uri);
-        return FS_CACHE.computeIfAbsent(info.key(), (key) -> {
-            if (!create) {
-                throw new FileSystemNotFoundException("file system not found for '" + info.key() + "'");
-            }
-
-            var config = new S3NioSpiConfiguration().withEndpoint(info.endpoint()).withBucketName(info.bucket());
-            if (info.accessKey() != null) {
-                config.withCredentials(info.accessKey(), info.accessSecret());
-            }
-            return new S3FileSystem(this, config);
-        });
-    }
-
     void closeFileSystem(FileSystem fs) {
         for (var key : FS_CACHE.keySet()) {
             if (fs == FS_CACHE.get(key)) {
@@ -864,7 +863,7 @@ public class S3FileSystemProvider extends FileSystemProvider {
             ).get(timeOut, unit);
             var objects = response.contents()
                 .stream()
-                .filter(s3Object -> s3Object.key().equals(prefix) || s3Object.key().startsWith(prefix + PATH_SEPARATOR))
+                .filter(s3Object -> s3Object.key().equals(prefix) || s3Object.key().startsWith(prefix))
                 .map(s3Object -> ObjectIdentifier.builder().key(s3Object.key()).build())
                 .collect(Collectors.toList());
             if (!objects.isEmpty()) {
@@ -895,9 +894,13 @@ public class S3FileSystemProvider extends FileSystemProvider {
         Function<S3Path, Boolean> fileExistsAndCannotReplaceFn
     ) throws FileAlreadyExistsException {
         final var sanitizedIdKey = sourceObjectIdentifierKey.replaceFirst(sourcePrefix, "");
-        var resolvedS3TargetPath = targetPath.resolve(sanitizedIdKey);
 
-        if (fileExistsAndCannotReplaceFn.apply(resolvedS3TargetPath)) {
+        // should resolve if the target path is a dir
+        if (targetPath.isDirectory()) {
+            targetPath = targetPath.resolve(sanitizedIdKey);
+        }
+
+        if (fileExistsAndCannotReplaceFn.apply(targetPath)) {
             throw new FileAlreadyExistsException("File already exists at the target key");
         }
 
@@ -906,8 +909,8 @@ public class S3FileSystemProvider extends FileSystemProvider {
                 .checksumAlgorithm(ChecksumAlgorithm.SHA256)
                 .sourceBucket(sourceBucket)
                 .sourceKey(sourceObjectIdentifierKey)
-                .destinationBucket(resolvedS3TargetPath.bucketName())
-                .destinationKey(resolvedS3TargetPath.getKey())
+                .destinationBucket(targetPath.bucketName())
+                .destinationKey(targetPath.getKey())
                 .build())
             .build()).completionFuture();
     }

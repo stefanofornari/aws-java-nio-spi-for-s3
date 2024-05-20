@@ -1,4 +1,6 @@
 [![Java CI with Gradle](https://github.com/awslabs/aws-java-nio-spi-for-s3/actions/workflows/gradle.yml/badge.svg)](https://github.com/awslabs/aws-java-nio-spi-for-s3/actions/workflows/gradle.yml)
+[![Github All Releases](https://img.shields.io/github/downloads/awslabs/aws-java-nio-spi-for-s3/total.svg)]()
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 # AWS Java NIO SPI for S3
 
@@ -67,7 +69,7 @@ For example:
 <dependency>
     <groupId>software.amazon.nio.s3</groupId>
     <artifactId>aws-java-nio-spi-for-s3</artifactId>
-    <version>2.0.0</version>
+    <version>2.0.1</version>
 </dependency>
 ```
 
