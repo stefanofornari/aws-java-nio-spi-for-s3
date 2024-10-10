@@ -48,13 +48,13 @@ by the JVM you need to supply the JAR on your classpath using the `-classpath` f
 you would type the following:
 
 ```
-java -classpath build/libs/nio-spi-for-s3-1.1.0-all.jar:myApp.jar org.example.myapp.Main
+java -classpath build/libs/nio-spi-for-s3-<version>-all.jar:myApp.jar org.example.myapp.Main
 ```
 
 As a concrete example, using Java 9+ with the popular genomics application [GATK](https://gatk.broadinstitute.org/hc/en-us), you could do the following:
 
 ```
-java -classpath build/libs/nio-spi-for-s3-1.1.0-all.jar:gatk-package-4.2.2.0-local.jar org.broadinstitute.hellbender.Main CountReads -I s3://<some-bucket>/ena/PRJEB3381/ERR194158/ERR194158.hg38.bam
+java -classpath build/libs/nio-spi-for-s3-<version>-all.jar:gatk-package-4.2.2.0-local.jar org.broadinstitute.hellbender.Main CountReads -I s3://<some-bucket>/ena/PRJEB3381/ERR194158/ERR194158.hg38.bam
 ```
 
 ## Including as a dependency
@@ -69,13 +69,13 @@ For example:
 <dependency>
     <groupId>software.amazon.nio.s3</groupId>
     <artifactId>aws-java-nio-spi-for-s3</artifactId>
-    <version>2.0.1</version>
+    <version>2.1.0</version>
 </dependency>
 ```
 
 `build.gradle(.kts)`
 ```groovy
-    implementation("software.amazon.nio.s3:aws-java-nio-spi-for-s3:2.0.0")
+    implementation("software.amazon.nio.s3:aws-java-nio-spi-for-s3:2.1.0")
 ```
 
 The library heavily relies on the `crt` client from aws. It uses the [`uber`
@@ -86,10 +86,10 @@ and wide range of supported platforms.
 > If **size** is an **issue**, you can **exclude** the `crt` dependency from the library and import the [specific `crt` library](https://github.com/awslabs/aws-crt-java?tab=readme-ov-file#platform-specific-jars)
 > for your platform. For example:
 > ```
-> implementation("software.amazon.nio.s3:aws-java-nio-spi-for-s3:2.0.0") {
+> implementation("software.amazon.nio.s3:aws-java-nio-spi-for-s3:2.1.0") {
 >	exclude group: 'software.amazon.awssdk.crt', module: 'aws-crt'
 > }
-> implementation 'software.amazon.awssdk.crt:aws-crt:0.29.11:linux-x86_64'
+> implementation 'software.amazon.awssdk.crt:aws-crt:0.31.1:linux-x86_64'
 > ```
 
 ### Java compatibility
@@ -179,7 +179,7 @@ Each fragment is downloaded concurrently on a unique thread.
 |parameter|description|
 |---------|-----------|
 |**aws.region**|specifies the default region for API calls|
-|**aws.accessKey**|specifies the key id to use for authentication|
+|**aws.accessKeyId**|specifies the key id to use for authentication|
 |**aws.secretAccessKey**|specifies the secret to use for authentication|
 |**s3.spi.read.fragment-number**|buffer asynchronously prefetches `n` sequential fragments from S3 (currently 50)|
 |**s3.spi.read.fragment-size**|size of each fragment (currently 5MB)|

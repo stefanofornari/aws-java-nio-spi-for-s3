@@ -8,11 +8,12 @@ package software.amazon.nio.spi.s3;
 import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static software.amazon.nio.spi.s3.Constants.PATH_SEPARATOR;
-import static software.amazon.nio.spi.s3.util.TimeOutUtils.TIMEOUT_TIME_LENGTH_1;
 import static software.amazon.nio.spi.s3.util.TimeOutUtils.logAndGenerateExceptionOnTimeOut;
 
 import java.io.IOException;
 import java.net.URI;
+import java.nio.channels.AsynchronousFileChannel;
+import java.nio.channels.FileChannel;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.AccessMode;
@@ -41,13 +42,14 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
@@ -79,7 +81,6 @@ import software.amazon.awssdk.transfer.s3.model.CompletedCopy;
 import software.amazon.awssdk.transfer.s3.model.CopyRequest;
 import software.amazon.nio.spi.s3.config.S3NioSpiConfiguration;
 import software.amazon.nio.spi.s3.util.S3FileSystemInfo;
-import software.amazon.nio.spi.s3.util.TimeOutUtils;
 
 /**
  * Service-provider class for S3 when represented as an NIO filesystem. The methods defined by the Files class will
@@ -95,7 +96,9 @@ public class S3FileSystemProvider extends FileSystemProvider {
      * Constant for the S3 scheme "s3"
      */
     static final String SCHEME = "s3";
-    private static final Map<String, S3FileSystem> FS_CACHE = new HashMap<>();
+    private static final Map<String, S3FileSystem> FS_CACHE = new ConcurrentHashMap<>();
+
+    protected S3NioSpiConfiguration configuration = new S3NioSpiConfiguration();
 
     private final Logger logger = LoggerFactory.getLogger(this.getClass().getName());
 
@@ -381,7 +384,7 @@ public class S3FileSystemProvider extends FileSystemProvider {
             directoryKey = directoryKey + PATH_SEPARATOR;
         }
 
-        var timeOut = TIMEOUT_TIME_LENGTH_1;
+        var timeOut = configuration.getTimeoutLow();
         final var unit = MINUTES;
 
         try {
@@ -416,7 +419,7 @@ public class S3FileSystemProvider extends FileSystemProvider {
 
         final var s3Client = s3Path.getFileSystem().client();
 
-        var timeOut = TIMEOUT_TIME_LENGTH_1;
+        var timeOut = configuration.getTimeoutLow();
         final var unit = MINUTES;
         try {
             var keys = s3Path.isDirectory() ?
@@ -470,7 +473,7 @@ public class S3FileSystemProvider extends FileSystemProvider {
         final var s3Client = s3SourcePath.getFileSystem().client();
         final var sourceBucket = s3SourcePath.bucketName();
 
-        final var timeOut = TIMEOUT_TIME_LENGTH_1;
+        final var timeOut = configuration.getTimeoutHigh();
         final var unit = MINUTES;
 
         var fileExistsAndCannotReplace = cannotReplaceAndFileExistsCheck(options, s3Client);
@@ -642,7 +645,7 @@ public class S3FileSystemProvider extends FileSystemProvider {
         final var s3Path = checkPath(path.toRealPath(NOFOLLOW_LINKS));
         final var response = getCompletableFutureForHead(s3Path);
 
-        var timeOut = TimeOutUtils.TIMEOUT_TIME_LENGTH_1;
+        var timeOut = configuration.getTimeoutLow();
         var unit = MINUTES;
 
         try {
@@ -679,6 +682,9 @@ public class S3FileSystemProvider extends FileSystemProvider {
         } catch (TimeoutException e) {
             throw logAndGenerateExceptionOnTimeOut(logger, "checkAccess", timeOut, unit);
         } catch (InterruptedException | ExecutionException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException(e);
         }
     }
@@ -744,7 +750,7 @@ public class S3FileSystemProvider extends FileSystemProvider {
 
         if (type.equals(BasicFileAttributes.class)) {
             @SuppressWarnings("unchecked")
-            var a = (A) S3BasicFileAttributes.get(s3Path, Duration.ofMinutes(TimeOutUtils.TIMEOUT_TIME_LENGTH_1));
+            var a = (A) S3BasicFileAttributes.get(s3Path, Duration.ofMinutes(configuration.getTimeoutLow()));
             return a;
         } else {
             throw new UnsupportedOperationException("cannot read attributes of type: " + type);
@@ -781,7 +787,7 @@ public class S3FileSystemProvider extends FileSystemProvider {
         }
 
         var attributesFilter = attributesFilterFor(attributes);
-        return S3BasicFileAttributes.get(s3Path, Duration.ofMinutes(TimeOutUtils.TIMEOUT_TIME_LENGTH_1)).asMap(attributesFilter);
+        return S3BasicFileAttributes.get(s3Path, Duration.ofMinutes(configuration.getTimeoutLow())).asMap(attributesFilter);
     }
 
     /**
@@ -793,6 +799,59 @@ public class S3FileSystemProvider extends FileSystemProvider {
     public void setAttribute(Path path, String attribute, Object value, LinkOption... options)
             throws UnsupportedOperationException {
         throw new UnsupportedOperationException("s3 file attributes cannot be modified by this class");
+    }
+
+    /**
+     * Set custom configuration. This configuration is referred to for API timeouts
+     *
+     * @param configuration    The new configuration containing the timeout info
+     */
+    public void setConfiguration(S3NioSpiConfiguration configuration) {
+        this.configuration = configuration;
+    }
+
+    /**
+     * @param path    the path of the file to open or create
+     * @param options options specifying how the file is opened
+     * @param attrs   an optional list of file attributes to set atomically when
+     *                creating the file. Currently, ignored.
+     * @return a new {@code FileChannel} object representing the specified file
+     * @throws IOException if an I/O error occurs
+     */
+    @Override
+    public FileChannel newFileChannel(Path path, Set<? extends OpenOption> options, FileAttribute<?>... attrs)
+            throws IOException {
+
+        S3FileSystem fs = (S3FileSystem) getFileSystem(path.toUri());
+        S3SeekableByteChannel s3SeekableByteChannel = new S3SeekableByteChannel((S3Path) path, fs.client(), options);
+        return new S3FileChannel(s3SeekableByteChannel);
+    }
+
+    /**
+     * Create an {@code AsynchronousFileChannel} to the specified path
+     * @param path
+     *          the path of the file to open or create
+     * @param options
+     *          options specifying how the file is opened
+     * @param executor
+     *          the thread pool or {@code null} to associate the channel with
+     *          the default thread pool
+     * @param attrs
+     *          an optional list of file attributes to set atomically when
+     *          creating the file
+     *
+     * @return a new {@code AsynchronousFileChannel} object representing the specified file
+     * @throws IOException if a problem occurs while creating the channel
+     */
+    @Override
+    public AsynchronousFileChannel newAsynchronousFileChannel(Path path,
+                                                              Set<? extends OpenOption> options,
+                                                              ExecutorService executor,
+                                                              FileAttribute<?>... attrs) throws IOException {
+        S3FileSystem fs = (S3FileSystem) getFileSystem(path.toUri());
+        S3AsyncClient s3Client = fs.client();
+        var byteChannel = new S3SeekableByteChannel((S3Path) path, s3Client, options);
+        return new AsyncS3FileChannel(byteChannel);
     }
 
     void closeFileSystem(FileSystem fs) {
@@ -823,7 +882,7 @@ public class S3FileSystemProvider extends FileSystemProvider {
     boolean exists(S3AsyncClient s3Client, S3Path path) throws InterruptedException, TimeoutException {
         try {
             s3Client.headObject(HeadObjectRequest.builder().bucket(path.bucketName()).key(path.getKey()).build())
-                .get(TIMEOUT_TIME_LENGTH_1, MINUTES);
+                .get(configuration.getTimeoutLow(), MINUTES);
             return true;
         } catch (ExecutionException | NoSuchKeyException e) {
             logger.debug("Could not retrieve object head information", e);
